@@ -1405,8 +1405,8 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
             @utils.retry(self.rbd.ImageBusy,
                          self.configuration.rados_connection_interval,
                          self.configuration.rados_connection_retries)
-            def _try_remove_volume(client: Any, volume_name: str) -> None:
-                if self.configuration.enable_deferred_deletion:
+            def _try_remove_volume(client: Any, volume_name: str, bypass_deferred_deletion: bool=False) -> None:
+                if self.configuration.enable_deferred_deletion and not bypass_deferred_deletion:
                     delay = self.configuration.deferred_deletion_delay
                 else:
                     try:
@@ -1428,7 +1428,14 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
             if clone_snap is None:
                 LOG.debug("deleting rbd volume %s", volume_name)
                 try:
-                    _try_remove_volume(client, volume_name)
+                    # NOTE(ebocchi): If the volume is temporary delete it immediately
+                    #                instead of moving to trash (deferred deletion).
+                    bypass_deferred_deletion = False
+                    with volume.obj_as_admin():
+                        if volume.admin_metadata.get('temporary', 'False') == 'True':
+                            LOG.info("bypassing deferred deletion for temp volume: %s", volume.id)
+                            bypass_deferred_deletion = True
+                    _try_remove_volume(client, volume_name, bypass_deferred_deletion)
                 except self.rbd.ImageBusy:
                     msg = (_("ImageBusy error raised while deleting rbd "
                              "volume. This may have been caused by a "
